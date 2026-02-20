@@ -1,0 +1,19 @@
+Programming Languages Overview
+
+Programming languages are formal languages used to write instructions for computers.
+They can be classified by paradigm: imperative, declarative, functional, or
+object-oriented.
+
+Go is a statically typed, compiled language designed at Google. It features garbage
+collection, concurrency through goroutines and channels, and a clean syntax. Go is
+popular for building web servers, cloud services, and command-line tools.
+
+Python is a dynamically typed, interpreted language known for its readable syntax and
+extensive standard library. It dominates the data science and machine learning landscape.
+
+Rust guarantees memory safety without a garbage collector using an ownership system.
+It achieves performance comparable to C and C++, making it suitable for systems
+programming and embedded software.
+
+Java runs on the JVM and follows a write-once-run-anywhere philosophy. It is widely
+used in enterprise applications, Android development, and big data processing.

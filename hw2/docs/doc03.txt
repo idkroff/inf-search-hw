@@ -1,0 +1,14 @@
+Database Systems and Indexing
+
+A database management system stores, retrieves, and manages structured data efficiently.
+Relational databases organize data into tables with rows and columns. SQL is the standard
+language used to query relational databases.
+
+Indexing is a technique to speed up data retrieval. A B-tree index maintains sorted data
+and allows searches, insertions, and deletions in logarithmic time. A hash index provides
+constant-time lookups for exact matches but does not support range queries.
+
+Inverted indexes are commonly used in full-text search engines. Each term maps to a list
+of documents containing that term, enabling fast boolean and ranked retrieval. Roaring
+bitmaps are a compressed bitmap data structure that efficiently represent sets of integers,
+widely used in modern search engines and databases.

@@ -1,0 +1,19 @@
+LSM Trees and Storage Engines
+
+Log-Structured Merge-trees (LSM trees) are a data structure used to provide high
+write throughput in storage engines. LSM trees were first described by Patrick O'Neil
+in 1996 and have since been adopted by many high-performance databases.
+
+An LSM tree consists of multiple levels of storage. The first level (L0) is an
+in-memory component called the MemTable, which holds recent writes. When the MemTable
+fills up, it is flushed to disk as an immutable SSTable (Sorted String Table).
+
+SSTables store key-value pairs sorted by key, enabling efficient binary search.
+As more SSTables accumulate at level 0, they are merged and compacted into level 1
+through a process called compaction. Compaction reduces space amplification and
+improves read performance by merging overlapping key ranges.
+
+Databases like LevelDB, RocksDB, Cassandra, and HBase use LSM trees as their core
+storage engine. Roaring bitmaps can be used in combination with LSM trees to build
+efficient inverted indexes for full-text search, as each posting list is stored as
+a compressed bitmap and merged lazily during compaction.

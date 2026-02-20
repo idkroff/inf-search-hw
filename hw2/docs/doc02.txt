@@ -1,0 +1,15 @@
+Introduction to Machine Learning
+
+Machine learning is a branch of artificial intelligence that enables computers to learn
+from data without being explicitly programmed. Algorithms improve their performance
+through experience, identifying patterns and making decisions with minimal human
+intervention.
+
+Supervised learning involves training models on labeled datasets. Unsupervised learning
+discovers hidden patterns in unlabeled data. Reinforcement learning trains agents through
+reward and punishment signals. Deep learning uses neural networks with many layers to
+model complex representations of data.
+
+Popular machine learning frameworks include TensorFlow, PyTorch, and scikit-learn.
+Applications range from image recognition and natural language processing to fraud
+detection and recommendation systems.

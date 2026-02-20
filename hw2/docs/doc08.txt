@@ -1,0 +1,18 @@
+The Internet and Computer Networks
+
+The Internet is a global network of interconnected computers that communicate using
+standardized protocols. The TCP/IP protocol suite forms the foundation of internet
+communication, providing reliable data transmission across diverse networks.
+
+The World Wide Web, invented by Tim Berners-Lee in 1989, is a system of interlinked
+hypertext documents accessible via the internet using HTTP and HTTPS protocols.
+Web browsers like Chrome, Firefox, and Safari render HTML, CSS, and JavaScript to
+display web pages.
+
+Domain Name System (DNS) translates human-readable domain names like google.com into
+IP addresses. Routers forward packets across the network based on routing tables.
+Firewalls and encryption protect network traffic from unauthorized access.
+
+Cloud computing delivers computing resources over the internet, enabling on-demand
+access to servers, storage, databases, and software. Major cloud providers include
+Amazon Web Services, Microsoft Azure, and Google Cloud Platform.
