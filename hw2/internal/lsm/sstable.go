@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"sort"
+	"strings"
 
 	"github.com/RoaringBitmap/roaring"
 )
@@ -71,6 +72,51 @@ func (s *SSTable) Get(term string) (*roaring.Bitmap, bool) {
 		return nil, false
 	}
 	return bm, true
+}
+
+// GetByPrefix возвращает все термины с данным префиксом и их битмапы
+func (s *SSTable) GetByPrefix(prefix string) map[string]*roaring.Bitmap {
+	result := make(map[string]*roaring.Bitmap)
+	start := sort.Search(len(s.index), func(i int) bool {
+		return s.index[i].term >= prefix
+	})
+
+	f, err := os.Open(s.path)
+	if err != nil {
+		return result
+	}
+	defer f.Close()
+
+	for i := start; i < len(s.index); i++ {
+		entry := s.index[i]
+		if !strings.HasPrefix(entry.term, prefix) {
+			break
+		}
+		if _, err := f.Seek(entry.dataOffset, io.SeekStart); err != nil {
+			break
+		}
+		var termLen uint16
+		if err := binary.Read(f, binary.BigEndian, &termLen); err != nil {
+			break
+		}
+		if _, err := f.Seek(int64(termLen), io.SeekCurrent); err != nil {
+			break
+		}
+		var bitmapLen uint32
+		if err := binary.Read(f, binary.BigEndian, &bitmapLen); err != nil {
+			break
+		}
+		bitmapBytes := make([]byte, bitmapLen)
+		if _, err := io.ReadFull(f, bitmapBytes); err != nil {
+			break
+		}
+		bm := roaring.New()
+		if _, err := bm.FromBuffer(bitmapBytes); err != nil {
+			break
+		}
+		result[entry.term] = bm
+	}
+	return result
 }
 
 // Scan читает секцию данных последовательно — используется при компакции, чтобы не делать много случайных seek-ов

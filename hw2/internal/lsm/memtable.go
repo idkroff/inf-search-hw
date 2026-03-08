@@ -2,6 +2,7 @@ package lsm
 
 import (
 	"sort"
+	"strings"
 
 	"github.com/RoaringBitmap/roaring"
 )
@@ -53,4 +54,14 @@ func (m *MemTable) ToMap() map[string]*roaring.Bitmap {
 
 func (m *MemTable) Clear() {
 	m.entries = make(map[string]*roaring.Bitmap)
+}
+
+func (m *MemTable) GetByPrefix(prefix string) map[string]*roaring.Bitmap {
+	result := make(map[string]*roaring.Bitmap)
+	for term, bm := range m.entries {
+		if strings.HasPrefix(term, prefix) {
+			result[term] = bm
+		}
+	}
+	return result
 }

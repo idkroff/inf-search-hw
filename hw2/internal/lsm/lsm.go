@@ -176,6 +176,87 @@ func (l *LSM) Lookup(term string) *roaring.Bitmap {
 	return result
 }
 
+// PrefixLookup возвращает объединение битмапов всех термов с данным префиксом
+func (l *LSM) PrefixLookup(prefix string) *roaring.Bitmap {
+	l.mu.RLock()
+	defer l.mu.RUnlock()
+
+	result := roaring.New()
+	for _, bm := range l.memTable.GetByPrefix(prefix) {
+		result.Or(bm)
+	}
+	for _, sst := range l.l0 {
+		for _, bm := range sst.GetByPrefix(prefix) {
+			result.Or(bm)
+		}
+	}
+	if l.l1 != nil {
+		for _, bm := range l.l1.GetByPrefix(prefix) {
+			result.Or(bm)
+		}
+	}
+	return result
+}
+
+// WildcardLookup принимает список термов (уже разрешённых из k-gram индекса) и возвращает их объединённый битмап
+func (l *LSM) WildcardLookup(terms []string) *roaring.Bitmap {
+	l.mu.RLock()
+	defer l.mu.RUnlock()
+
+	result := roaring.New()
+	for _, term := range terms {
+		if bm, ok := l.memTable.Get(term); ok {
+			result.Or(bm)
+		}
+		for _, sst := range l.l0 {
+			if bm, ok := sst.Get(term); ok {
+				result.Or(bm)
+			}
+		}
+		if l.l1 != nil {
+			if bm, ok := l.l1.Get(term); ok {
+				result.Or(bm)
+			}
+		}
+	}
+	return result
+}
+
+// AllTerms возвращает все уникальные термины из всех уровней индекса
+func (l *LSM) AllTerms() ([]string, error) {
+	l.mu.RLock()
+	defer l.mu.RUnlock()
+
+	seen := make(map[string]struct{})
+	for _, term := range l.memTable.Terms() {
+		seen[term] = struct{}{}
+	}
+	for _, sst := range l.l0 {
+		entries, err := sst.Scan()
+		if err != nil {
+			return nil, err
+		}
+		for term := range entries {
+			seen[term] = struct{}{}
+		}
+	}
+	if l.l1 != nil {
+		entries, err := l.l1.Scan()
+		if err != nil {
+			return nil, err
+		}
+		for term := range entries {
+			seen[term] = struct{}{}
+		}
+	}
+	terms := make([]string, 0, len(seen))
+	for term := range seen {
+		terms = append(terms, term)
+	}
+	sort.Strings(terms)
+	return terms, nil
+}
+
 func (l *LSM) Universe() *roaring.Bitmap {
 	l.mu.RLock()
 	defer l.mu.RUnlock()

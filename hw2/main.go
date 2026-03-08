@@ -9,6 +9,7 @@ import (
 	"sort"
 	"strings"
 
+	"hw2/internal/kgram"
 	"hw2/internal/lsm"
 	"hw2/internal/query"
 	"hw2/internal/text"
@@ -20,6 +21,7 @@ func main() {
 	lang    := flag.String("lang", "english", "stemming language: english | russian")
 	flush   := flag.Int("flush", 200, "flush MemTable after this many (term,docID) pairs")
 	reindex := flag.Bool("reindex", false, "delete existing index and rebuild from scratch")
+	nostem  := flag.Bool("nostem", false, "disable stemming/stop-words (нужно для prefix/wildcard поиска)")
 	flag.Parse()
 
 	if *reindex {
@@ -28,6 +30,7 @@ func main() {
 	}
 
 	proc := text.NewProcessor(*lang)
+	proc.NoStem = *nostem
 
 	idx, err := lsm.New(*dataDir, proc, *flush)
 	if err != nil {
@@ -35,10 +38,11 @@ func main() {
 	}
 	defer idx.Close()
 
-	// индексируем только при первом запуске (пустой universe) или после -reindex
+	kg := kgram.New(kgram.DefaultK)
+
 	if idx.Universe().GetCardinality() == 0 {
 		fmt.Printf("Indexing documents from %q ...\n", *docsDir)
-		if err := indexDirectory(idx, *docsDir); err != nil {
+		if err := indexDirectory(idx, kg, proc, *docsDir); err != nil {
 			fatalf("indexing: %v", err)
 		}
 		if err := idx.Flush(); err != nil {
@@ -46,15 +50,23 @@ func main() {
 		}
 		fmt.Println()
 	} else {
-		fmt.Printf("Loaded existing index (%d documents).\n\n",
-			idx.Universe().GetCardinality())
+		fmt.Printf("Loaded existing index (%d documents).\n", idx.Universe().GetCardinality())
+		fmt.Println("Rebuilding k-gram index in memory...")
+		if terms, err := idx.AllTerms(); err != nil {
+			fatalf("rebuild kgram: %v", err)
+		} else {
+			for _, t := range terms {
+				kg.AddTerm(t)
+			}
+		}
+		fmt.Println()
 	}
 
 	printStats(idx)
-	runREPL(idx)
+	runREPL(idx, kg)
 }
 
-func indexDirectory(idx *lsm.LSM, dir string) error {
+func indexDirectory(idx *lsm.LSM, kg *kgram.Index, proc *text.Processor, dir string) error {
 	return filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
 			return err
@@ -70,15 +82,20 @@ func indexDirectory(idx *lsm.LSM, dir string) error {
 		if err != nil {
 			return fmt.Errorf("index %s: %w", path, err)
 		}
+		for _, term := range proc.Process(string(content)) {
+			kg.AddTerm(term)
+		}
 		fmt.Printf("  [%3d] %s\n", docID, path)
 		return nil
 	})
 }
 
-const help = `Boolean query REPL
+const help = `Boolean + Prefix + Wildcard query REPL
   Operators : AND  OR  NOT  ( )
   Implicit AND: "fox hound" is the same as "fox AND hound"
-  Terms are stemmed and stop-words are ignored automatically.
+  Prefix search:   "comput*"   — все термины с данным префиксом
+  Wildcard search: "c*t"       — k-gram поиск по паттерну (рекомендуется -nostem)
+  Terms are stemmed unless -nostem is set.
 
 Commands:
   stats    — show index statistics
@@ -87,7 +104,7 @@ Commands:
   quit     — exit
 `
 
-func runREPL(idx *lsm.LSM) {
+func runREPL(idx *lsm.LSM, kg *kgram.Index) {
 	fmt.Print(help)
 
 	scanner := bufio.NewScanner(os.Stdin)
@@ -120,7 +137,7 @@ func runREPL(idx *lsm.LSM) {
 			continue
 		}
 
-		results, err := query.Evaluate(line, idx)
+		results, err := query.Evaluate(line, idx, kg)
 		if err != nil {
 			fmt.Printf("Parse error: %v\n", err)
 			continue

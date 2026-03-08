@@ -4,6 +4,8 @@
 //	and_expr = not_expr  ( "AND"? not_expr )*   // два слова рядом — неявный AND
 //	not_expr = "NOT" not_expr | primary
 //	primary  = WORD | "(" or_expr ")"
+//
+// WORD может содержать '*' — тогда применяется prefix или wildcard поиск.
 package query
 
 import (
@@ -13,6 +15,7 @@ import (
 
 	"github.com/RoaringBitmap/roaring"
 
+	"hw2/internal/kgram"
 	"hw2/internal/lsm"
 )
 
@@ -77,6 +80,7 @@ type parser struct {
 	tokens []token
 	pos    int
 	idx    *lsm.LSM
+	kg     *kgram.Index
 }
 
 func (p *parser) peek() token { return p.tokens[p.pos] }
@@ -89,12 +93,12 @@ func (p *parser) consume() token {
 }
 
 // Evaluate разбирает запрос и сразу возвращает bitmap подходящих документов
-func Evaluate(q string, idx *lsm.LSM) (*roaring.Bitmap, error) {
+func Evaluate(q string, idx *lsm.LSM, kg *kgram.Index) (*roaring.Bitmap, error) {
 	tokens := lex(strings.TrimSpace(q))
 	if tokens[0].kind == tokEOF {
 		return nil, fmt.Errorf("empty query")
 	}
-	p := &parser{tokens: tokens, idx: idx}
+	p := &parser{tokens: tokens, idx: idx, kg: kg}
 	result, err := p.parseOr()
 	if err != nil {
 		return nil, err
@@ -163,7 +167,7 @@ func (p *parser) parsePrimary() (*roaring.Bitmap, error) {
 	switch t.kind {
 	case tokWord:
 		p.consume()
-		return p.idx.Lookup(t.val), nil
+		return p.lookupTerm(t.val), nil
 	case tokLParen:
 		p.consume()
 		result, err := p.parseOr()
@@ -178,4 +182,26 @@ func (p *parser) parsePrimary() (*roaring.Bitmap, error) {
 	default:
 		return nil, fmt.Errorf("expected term or '(' but got %q", t.val)
 	}
+}
+
+// lookupTerm определяет тип запроса и вызывает нужный метод поиска
+func (p *parser) lookupTerm(term string) *roaring.Bitmap {
+	if !strings.Contains(term, "*") {
+		return p.idx.Lookup(term)
+	}
+
+	term = strings.ToLower(term)
+
+	// Поиск по префиксу: "word*" — звёздочка только в конце
+	if strings.HasSuffix(term, "*") && !strings.Contains(term[:len(term)-1], "*") {
+		return p.idx.PrefixLookup(term[:len(term)-1])
+	}
+
+	// Wildcard-поиск через k-gram индекс
+	if p.kg != nil {
+		if matching := p.kg.ResolveWildcard(term); len(matching) > 0 {
+			return p.idx.WildcardLookup(matching)
+		}
+	}
+	return roaring.New()
 }

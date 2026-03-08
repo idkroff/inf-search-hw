@@ -10,6 +10,7 @@ import (
 type Processor struct {
 	stopWords map[string]struct{}
 	language  string
+	NoStem    bool // если true — пропускаем стемминг и стоп-слова (нужно для prefix/wildcard поиска)
 }
 
 func NewProcessor(language string) *Processor {
@@ -33,10 +34,17 @@ func (p *Processor) Process(text string) []string {
 		if len(token) < 2 { // одиночные символы вроде "s" или "a" не индексируем
 			continue
 		}
-		if _, isStop := p.stopWords[token]; isStop {
-			continue
+		if !p.NoStem {
+			if _, isStop := p.stopWords[token]; isStop {
+				continue
+			}
 		}
-		term := p.stem(token)
+		var term string
+		if p.NoStem {
+			term = token
+		} else {
+			term = p.stem(token)
+		}
 		if len(term) > 0 {
 			result = append(result, term)
 		}
@@ -49,6 +57,9 @@ func (p *Processor) ProcessTerm(term string) string {
 	term = strings.ToLower(strings.TrimSpace(term))
 	if len(term) < 2 {
 		return ""
+	}
+	if p.NoStem {
+		return term
 	}
 	if _, isStop := p.stopWords[term]; isStop {
 		return ""
