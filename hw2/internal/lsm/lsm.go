@@ -8,11 +8,18 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/RoaringBitmap/roaring"
 
 	"hw2/internal/text"
 )
+
+// dateEntry хранит метку времени и ID документа
+type dateEntry struct {
+	ts    int64 // Unix timestamp
+	docID uint32
+}
 
 const maxL0Tables = 4
 
@@ -30,6 +37,9 @@ type LSM struct {
 
 	DocPaths  map[uint32]string
 	nextDocID uint32
+
+	startDates []dateEntry
+	endDates   []dateEntry
 }
 
 func New(dataDir string, processor *text.Processor, flushThreshold int) (*LSM, error) {
@@ -263,6 +273,84 @@ func (l *LSM) Universe() *roaring.Bitmap {
 	return l.universe.Clone()
 }
 
+func (l *LSM) SetDocDates(docID uint32, start time.Time, end *time.Time) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.insertSorted(&l.startDates, dateEntry{ts: start.Unix(), docID: docID})
+	if end != nil {
+		l.insertSorted(&l.endDates, dateEntry{ts: end.Unix(), docID: docID})
+	}
+}
+
+func (l *LSM) insertSorted(s *[]dateEntry, e dateEntry) {
+	pos := sort.Search(len(*s), func(i int) bool { return (*s)[i].ts > e.ts })
+	*s = append(*s, dateEntry{})
+	copy((*s)[pos+1:], (*s)[pos:])
+	(*s)[pos] = e
+}
+
+// AppearedInRange возвращает bitmap документов, появившихся в диапазоне [from, to]
+func (l *LSM) AppearedInRange(from, to time.Time) *roaring.Bitmap {
+	l.mu.RLock()
+	defer l.mu.RUnlock()
+	return l.collectRange(l.startDates, from.Unix(), to.Unix())
+}
+
+// ValidInRange возвращает bitmap документов, валидных в диапазоне [from, to]
+// Документ [s, e] валиден если s <= to AND e >= from
+func (l *LSM) ValidInRange(from, to time.Time) *roaring.Bitmap {
+	l.mu.RLock()
+	defer l.mu.RUnlock()
+
+	// A: документы с start_date <= to
+	a := l.collectUpTo(l.startDates, to.Unix())
+	// B: документы с end_date < from
+	b := l.collectUpTo(l.endDates, from.Unix()-1)
+	a.AndNot(b)
+	return a
+}
+
+// collectRange собирает docID из отсортированного слайса где ts in [lo, hi]
+func (l *LSM) collectRange(s []dateEntry, lo, hi int64) *roaring.Bitmap {
+	bm := roaring.New()
+	start := sort.Search(len(s), func(i int) bool { return s[i].ts >= lo })
+	for i := start; i < len(s) && s[i].ts <= hi; i++ {
+		bm.Add(s[i].docID)
+	}
+	return bm
+}
+
+func (l *LSM) DocDateString(docID uint32) string {
+	l.mu.RLock()
+	defer l.mu.RUnlock()
+
+	startStr := "?"
+	for _, e := range l.startDates {
+		if e.docID == docID {
+			startStr = time.Unix(e.ts, 0).UTC().Format(dateFmt)
+			break
+		}
+	}
+	endStr := "—"
+	for _, e := range l.endDates {
+		if e.docID == docID {
+			endStr = time.Unix(e.ts, 0).UTC().Format(dateFmt)
+			break
+		}
+	}
+	return startStr + " → " + endStr
+}
+
+// collectUpTo собирает docID из отсортированного слайса где ts <= hi
+func (l *LSM) collectUpTo(s []dateEntry, hi int64) *roaring.Bitmap {
+	bm := roaring.New()
+	end := sort.Search(len(s), func(i int) bool { return s[i].ts > hi })
+	for i := 0; i < end; i++ {
+		bm.Add(s[i].docID)
+	}
+	return bm
+}
+
 func (l *LSM) Stats() map[string]any {
 	l.mu.RLock()
 	defer l.mu.RUnlock()
@@ -284,6 +372,8 @@ func (l *LSM) Close() error {
 	return l.saveMeta()
 }
 
+const dateFmt = "2006-01-02"
+
 func (l *LSM) saveMeta() error {
 	uData, err := l.universe.ToBytes()
 	if err != nil {
@@ -293,9 +383,26 @@ func (l *LSM) saveMeta() error {
 		return err
 	}
 
+	endByDoc := make(map[uint32]int64, len(l.endDates))
+	for _, e := range l.endDates {
+		endByDoc[e.docID] = e.ts
+	}
+	startByDoc := make(map[uint32]int64, len(l.startDates))
+	for _, e := range l.startDates {
+		startByDoc[e.docID] = e.ts
+	}
+
 	var sb strings.Builder
 	for id, path := range l.DocPaths {
-		fmt.Fprintf(&sb, "%d\t%s\n", id, path)
+		startStr := ""
+		if ts, ok := startByDoc[id]; ok {
+			startStr = time.Unix(ts, 0).UTC().Format(dateFmt)
+		}
+		endStr := ""
+		if ts, ok := endByDoc[id]; ok {
+			endStr = time.Unix(ts, 0).UTC().Format(dateFmt)
+		}
+		fmt.Fprintf(&sb, "%d\t%s\t%s\t%s\n", id, path, startStr, endStr)
 	}
 	return os.WriteFile(filepath.Join(l.dataDir, "docs.tsv"), []byte(sb.String()), 0o644)
 }
@@ -353,8 +460,8 @@ func (l *LSM) loadExisting() error {
 			if line == "" {
 				continue
 			}
-			parts := strings.SplitN(line, "\t", 2)
-			if len(parts) != 2 {
+			parts := strings.SplitN(line, "\t", 4)
+			if len(parts) < 2 {
 				continue
 			}
 			id64, err := strconv.ParseUint(parts[0], 10, 32)
@@ -365,6 +472,16 @@ func (l *LSM) loadExisting() error {
 			l.DocPaths[id] = parts[1]
 			if id >= l.nextDocID {
 				l.nextDocID = id + 1
+			}
+			if len(parts) >= 4 {
+				if t, err := time.Parse(dateFmt, parts[2]); err == nil {
+					l.insertSorted(&l.startDates, dateEntry{ts: t.Unix(), docID: id})
+				}
+				if parts[3] != "" {
+					if t, err := time.Parse(dateFmt, parts[3]); err == nil {
+						l.insertSorted(&l.endDates, dateEntry{ts: t.Unix(), docID: id})
+					}
+				}
 			}
 		}
 	}
