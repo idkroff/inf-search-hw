@@ -8,12 +8,15 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 
 	"hw2/internal/kgram"
 	"hw2/internal/lsm"
 	"hw2/internal/query"
 	"hw2/internal/text"
 )
+
+const metaDateFmt = "2006-01-02"
 
 func main() {
 	docsDir := flag.String("docs", "docs", "directory with .txt documents to index")
@@ -67,6 +70,9 @@ func main() {
 }
 
 func indexDirectory(idx *lsm.LSM, kg *kgram.Index, proc *text.Processor, dir string) error {
+	meta := loadMetadata(dir)
+	now := time.Now()
+
 	return filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
 			return err
@@ -85,17 +91,40 @@ func indexDirectory(idx *lsm.LSM, kg *kgram.Index, proc *text.Processor, dir str
 		for _, term := range proc.Process(string(content)) {
 			kg.AddTerm(term)
 		}
-		fmt.Printf("  [%3d] %s\n", docID, path)
+
+		// Даты: из metadata.csv или текущая дата
+		pair, ok := meta[info.Name()]
+		startDate := now
+		var endDate *time.Time
+		if ok {
+			if pair[0] != nil {
+				startDate = *pair[0]
+			}
+			endDate = pair[1]
+		}
+		idx.SetDocDates(docID, startDate, endDate)
+
+		endStr := "—"
+		if endDate != nil {
+			endStr = endDate.Format(metaDateFmt)
+		}
+		fmt.Printf("  [%3d] %-30s  %s → %s\n", docID, path,
+			startDate.Format(metaDateFmt), endStr)
 		return nil
 	})
 }
 
-const help = `Boolean + Prefix + Wildcard query REPL
+const help = `Boolean + Prefix + Wildcard + Date query REPL
   Operators : AND  OR  NOT  ( )
   Implicit AND: "fox hound" is the same as "fox AND hound"
-  Prefix search:   "comput*"   — все термины с данным префиксом
-  Wildcard search: "c*t"       — k-gram поиск по паттерну (рекомендуется -nostem)
+  Prefix search:   "comput*"                — все термины с данным префиксом
+  Wildcard search: "c*t"                    — k-gram поиск (рекомендуется -nostem)
   Terms are stemmed unless -nostem is set.
+
+Date predicates (задание 4):
+  APPEARED:[2020-01-01,2022-12-31]          — документ появился в диапазоне (4A/4B)
+  VALID:[2020-01-01,2022-12-31]             — документ валиден в диапазоне (4B)
+  fox AND APPEARED:[2020-01-01,2022-12-31]  — булева формула + дата
 
 Commands:
   stats    — show index statistics
@@ -154,8 +183,9 @@ func runREPL(idx *lsm.LSM, kg *kgram.Index) {
 		fmt.Printf("Found %d document(s)  [query: %s]\n", len(ids), line)
 		for _, id := range ids {
 			path := idx.DocPaths[id]
-			snippet := readSnippet(path, 80)
-			fmt.Printf("  [%3d] %-35s  %s\n", id, filepath.Base(path), snippet)
+			dateStr := idx.DocDateString(id)
+			snippet := readSnippet(path, 60)
+			fmt.Printf("  [%3d] %-25s  %-25s  %s\n", id, filepath.Base(path), dateStr, snippet)
 		}
 		fmt.Println()
 	}

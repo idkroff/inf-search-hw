@@ -11,6 +11,7 @@ package query
 import (
 	"fmt"
 	"strings"
+	"time"
 	"unicode"
 
 	"github.com/RoaringBitmap/roaring"
@@ -18,6 +19,8 @@ import (
 	"hw2/internal/kgram"
 	"hw2/internal/lsm"
 )
+
+const dateFmt = "2006-01-02"
 
 type tokenKind int
 
@@ -29,7 +32,34 @@ const (
 	tokLParen
 	tokRParen
 	tokEOF
+	tokValidRange    // VALID:[from,to]
+	tokAppearedRange // APPEARED:[from,to]
 )
+
+// parseDateRange разбирает строку вида "2020-01-01,2021-12-31".
+func parseDateRange(s string) (from, to time.Time, err error) {
+	parts := strings.SplitN(s, ",", 2)
+	if len(parts) != 2 {
+		return from, to, fmt.Errorf("date range must be 'from,to', got %q", s)
+	}
+	if parts[0] == "" {
+		from = time.Unix(0, 0).UTC()
+	} else {
+		from, err = time.Parse(dateFmt, parts[0])
+		if err != nil {
+			return from, to, fmt.Errorf("invalid from date %q: %w", parts[0], err)
+		}
+	}
+	if parts[1] == "" {
+		to = time.Date(9999, 12, 31, 0, 0, 0, 0, time.UTC)
+	} else {
+		to, err = time.Parse(dateFmt, parts[1])
+		if err != nil {
+			return from, to, fmt.Errorf("invalid to date %q: %w", parts[1], err)
+		}
+	}
+	return from, to, nil
+}
 
 type token struct {
 	kind tokenKind
@@ -60,13 +90,20 @@ func lex(q string) []token {
 			}
 			word := q[i:j]
 			i = j
-			switch strings.ToUpper(word) {
-			case "AND":
+			upper := strings.ToUpper(word)
+			switch {
+			case upper == "AND":
 				tokens = append(tokens, token{tokAND, "AND"})
-			case "OR":
+			case upper == "OR":
 				tokens = append(tokens, token{tokOR, "OR"})
-			case "NOT":
+			case upper == "NOT":
 				tokens = append(tokens, token{tokNOT, "NOT"})
+			case strings.HasPrefix(upper, "VALID:[") && strings.HasSuffix(word, "]"):
+				inner := word[len("VALID:[") : len(word)-1]
+				tokens = append(tokens, token{tokValidRange, inner})
+			case strings.HasPrefix(upper, "APPEARED:[") && strings.HasSuffix(word, "]"):
+				inner := word[len("APPEARED:[") : len(word)-1]
+				tokens = append(tokens, token{tokAppearedRange, inner})
 			default:
 				tokens = append(tokens, token{tokWord, word})
 			}
@@ -134,7 +171,8 @@ func (p *parser) parseAnd() (*roaring.Bitmap, error) {
 		k := p.peek().kind
 		if k == tokAND {
 			p.consume() // явный AND
-		} else if k == tokWord || k == tokLParen || k == tokNOT {
+		} else if k == tokWord || k == tokLParen || k == tokNOT ||
+			k == tokValidRange || k == tokAppearedRange {
 			// неявный AND: два токена рядом без оператора
 		} else {
 			break
@@ -168,6 +206,20 @@ func (p *parser) parsePrimary() (*roaring.Bitmap, error) {
 	case tokWord:
 		p.consume()
 		return p.lookupTerm(t.val), nil
+	case tokValidRange:
+		p.consume()
+		from, to, err := parseDateRange(t.val)
+		if err != nil {
+			return nil, err
+		}
+		return p.idx.ValidInRange(from, to), nil
+	case tokAppearedRange:
+		p.consume()
+		from, to, err := parseDateRange(t.val)
+		if err != nil {
+			return nil, err
+		}
+		return p.idx.AppearedInRange(from, to), nil
 	case tokLParen:
 		p.consume()
 		result, err := p.parseOr()
